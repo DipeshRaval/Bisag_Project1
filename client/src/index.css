@@ -1,0 +1,20 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap");
+@import "tailwindcss";
+
+@layer base {
+	:root {
+		font-family: "Manrope", system-ui, -apple-system, sans-serif;
+		color: #0f172a;
+		background: radial-gradient(circle at 20% 20%, #e0e7ff 0, transparent 35%),
+			radial-gradient(circle at 80% 0%, #ffe4f3 0, transparent 30%),
+			#f8fafc;
+	}
+
+	body {
+		min-height: 100vh;
+	}
+
+	button {
+		cursor: pointer;
+	}
+}
