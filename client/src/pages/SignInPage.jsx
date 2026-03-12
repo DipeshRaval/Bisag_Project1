@@ -3,7 +3,18 @@ import { Link, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../utils/api'
 import { clearAuthentication, markAuthenticated } from '../utils/auth'
 
-const Field = ({ label, type, name, placeholder, note, onChange, value }) => (
+const Field = ({
+  label,
+  type,
+  name,
+  placeholder,
+  note,
+  onChange,
+  value,
+  onTogglePassword,
+  isPasswordField = false,
+  isPasswordVisible = false,
+}) => (
   <label className="block text-sm font-medium text-slate-700">
     <span className="mb-2 block">{label}</span>
     <div className="relative">
@@ -13,15 +24,29 @@ const Field = ({ label, type, name, placeholder, note, onChange, value }) => (
         value={value}
         onChange={onChange}
         placeholder={placeholder}
-        className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 shadow-sm outline-none transition focus:-translate-y-0.5 focus:border-indigo-300 focus:shadow-lg focus:shadow-indigo-100"
+        className={`w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 shadow-sm outline-none transition focus:-translate-y-0.5 focus:border-indigo-300 focus:shadow-lg focus:shadow-indigo-100 ${isPasswordField ? 'pr-12' : ''}`}
       />
-      {type === 'password' ? (
-        <span className="absolute inset-y-0 right-0 grid place-items-center px-4 text-slate-400">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-5 w-5">
-            <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />
-            <circle cx="12" cy="12" r="2.5" />
-          </svg>
-        </span>
+      {isPasswordField ? (
+        <button
+          type="button"
+          onClick={onTogglePassword}
+          className="absolute inset-y-0 right-0 grid place-items-center px-4 text-slate-400 transition hover:text-slate-600"
+          aria-label={isPasswordVisible ? 'Hide password' : 'Show password'}
+        >
+          {isPasswordVisible ? (
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-5 w-5">
+              <path d="M3 3l18 18" />
+              <path d="M10.58 10.58A2 2 0 0 0 13.42 13.42" />
+              <path d="M9.36 5.73A10.94 10.94 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16.78 16.78 0 0 1-3.37 4.4" />
+              <path d="M6.6 6.6A16.53 16.53 0 0 0 2.5 12s3.5 6.5 9.5 6.5a10.6 10.6 0 0 0 4.07-.82" />
+            </svg>
+          ) : (
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-5 w-5">
+              <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />
+              <circle cx="12" cy="12" r="2.5" />
+            </svg>
+          )}
+        </button>
       ) : (
         <span className="absolute inset-y-0 right-0 grid place-items-center px-4 text-slate-400">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-5 w-5">
@@ -38,6 +63,7 @@ const Field = ({ label, type, name, placeholder, note, onChange, value }) => (
 const SignInPage = () => {
   const navigate = useNavigate()
   const [form, setForm] = useState({ email: '', password: '' })
+  const [showPassword, setShowPassword] = useState(false)
   const [errors, setErrors] = useState({})
   const [status, setStatus] = useState({ message: '', error: false })
   const [submitting, setSubmitting] = useState(false)
@@ -70,12 +96,6 @@ const SignInPage = () => {
 
   const validatePassword = (value) => {
     if (!value) return 'Password is required'
-    if (value.length < 8) return 'At least 8 characters'
-    if (!/[A-Z]/.test(value)) return 'Include at least 1 uppercase letter'
-    if (!/[a-z]/.test(value)) return 'Include at least 1 lowercase letter'
-    if (!/\d/.test(value)) return 'Include at least 1 number'
-    if (!/[^A-Za-z0-9]/.test(value)) return 'Include at least 1 special character'
-    if (/(123|abc|password|qwerty)/i.test(value)) return 'Avoid common patterns'
     return ''
   }
 
@@ -150,18 +170,21 @@ const SignInPage = () => {
             <div className="space-y-1">
               <Field
                 label="Password *"
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 name="password"
                 value={form.password}
                 onChange={handleChange}
                 placeholder="Enter your password"
+                isPasswordField
+                isPasswordVisible={showPassword}
+                onTogglePassword={() => setShowPassword((prev) => !prev)}
               />
               {errors.password ? <p className="text-xs text-red-500">{errors.password}</p> : null}
             </div>
 
             <div className="flex items-center justify-between text-xs font-medium text-indigo-600">
               <button className="transition hover:text-indigo-700" type="button">Forgot Email?</button>
-              <button className="transition hover:text-indigo-700" type="button">Forgot Password?</button>
+              <Link to="/forgot-password" className="transition hover:text-indigo-700">Forgot Password?</Link>
             </div>
 
             <button

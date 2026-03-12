@@ -38,4 +38,3 @@ model Session {
   createdAt DateTime @default(now())
   expiresAt DateTime
 }
-

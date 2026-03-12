@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { PhoneNumberUtil } from 'google-libphonenumber'
 import { Link, useNavigate } from 'react-router-dom'
-import { apiFetch } from '../utils/api'
+import { apiFetchJson } from '../utils/api'
 import { markAuthenticated } from '../utils/auth'
 
 const SignUpPage = () => {
@@ -20,8 +20,13 @@ const SignUpPage = () => {
   const [errors, setErrors] = useState({})
   const [status, setStatus] = useState({ message: '', error: false })
   const [submitting, setSubmitting] = useState(false)
+  const [signupOtpRequired, setSignupOtpRequired] = useState(false)
+  const [signupToken, setSignupToken] = useState('')
+  const [signupOtp, setSignupOtp] = useState('')
   const [touched, setTouched] = useState({ password: false, confirmPassword: false })
   const [dobFocused, setDobFocused] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const dateInputRef = useRef(null)
 
   const allowedEmailDomains = ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'zoho.com', 'icloud.com', 'proton.me', 'aol.com']
@@ -227,21 +232,62 @@ const SignUpPage = () => {
       if (files.profileImage) fd.append('profileImage', files.profileImage)
       if (files.document) fd.append('document', files.document)
 
-      const res = await apiFetch('/api/signup', {
+      const { res, data } = await apiFetchJson('/api/signup', {
         method: 'POST',
         body: fd,
       })
-
-      const data = await res.json()
       if (!res.ok) {
         throw new Error(data?.message || 'Submission failed')
       }
 
-      setStatus({ message: 'Signup submitted successfully.', error: false })
+      if (data?.requiresOtp && data?.signupToken) {
+        setSignupOtpRequired(true)
+        setSignupToken(data.signupToken)
+        setStatus({ message: data?.message || 'Signup OTP sent. Verify OTP to continue.', error: false })
+        return
+      }
+
+      setStatus({ message: data?.message || 'Signup submitted successfully.', error: false })
       markAuthenticated()
       navigate('/', { replace: true })
     } catch (err) {
       setStatus({ message: err.message || 'Something went wrong', error: true })
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleVerifySignupOtp = async () => {
+    if (!/^\d{6}$/.test(signupOtp.trim())) {
+      setStatus({ message: 'Enter a valid 6-digit OTP', error: true })
+      return
+    }
+
+    if (!signupToken) {
+      setStatus({ message: 'Signup session expired. Please submit signup again.', error: true })
+      return
+    }
+
+    setSubmitting(true)
+    setStatus({ message: '', error: false })
+    try {
+      const { res, data } = await apiFetchJson('/api/signup/verify-otp', {
+        method: 'POST',
+        body: JSON.stringify({
+          signupToken,
+          otp: signupOtp.trim(),
+        }),
+      })
+
+      if (!res.ok) {
+        throw new Error(data?.message || 'Failed to verify signup OTP')
+      }
+
+      markAuthenticated()
+      setStatus({ message: data?.message || 'Signup verified successfully.', error: false })
+      navigate('/', { replace: true })
+    } catch (err) {
+      setStatus({ message: err.message || 'Failed to verify signup OTP', error: true })
     } finally {
       setSubmitting(false)
     }
@@ -383,17 +429,39 @@ const SignUpPage = () => {
           <div className="grid gap-4 md:grid-cols-2">
             <div>
               <label className="text-sm font-semibold text-slate-800">Password *</label>
-              <input
-                required
-                type="password"
-                name="password"
-                value={formData.password}
-                onChange={handleChange}
-                onFocus={handleFocus}
-                onBlur={handleBlur}
-                placeholder="Minimum 8 characters with special chars"
-                className={`mt-2 w-full rounded-2xl border bg-white px-4 py-3 shadow-sm outline-none transition focus:border-indigo-300 focus:shadow-lg focus:shadow-indigo-100 ${fieldBorder('password', formData.password)}`}
-              />
+              <div className="relative mt-2">
+                <input
+                  required
+                  type={showPassword ? 'text' : 'password'}
+                  name="password"
+                  value={formData.password}
+                  onChange={handleChange}
+                  onFocus={handleFocus}
+                  onBlur={handleBlur}
+                  placeholder="Minimum 8 characters with special chars"
+                  className={`w-full rounded-2xl border bg-white px-4 py-3 pr-12 shadow-sm outline-none transition focus:border-indigo-300 focus:shadow-lg focus:shadow-indigo-100 ${fieldBorder('password', formData.password)}`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute inset-y-0 right-0 grid place-items-center px-4 text-slate-400 transition hover:text-slate-600"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-5 w-5">
+                      <path d="M3 3l18 18" />
+                      <path d="M10.58 10.58A2 2 0 0 0 13.42 13.42" />
+                      <path d="M9.36 5.73A10.94 10.94 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16.78 16.78 0 0 1-3.37 4.4" />
+                      <path d="M6.6 6.6A16.53 16.53 0 0 0 2.5 12s3.5 6.5 9.5 6.5a10.6 10.6 0 0 0 4.07-.82" />
+                    </svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-5 w-5">
+                      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />
+                      <circle cx="12" cy="12" r="2.5" />
+                    </svg>
+                  )}
+                </button>
+              </div>
               {strength ? (
                 <>
                   <div className="mt-2 flex items-center gap-2">
@@ -427,17 +495,39 @@ const SignUpPage = () => {
             </div>
             <div>
               <label className="text-sm font-semibold text-slate-800">Confirm Password *</label>
-              <input
-                required
-                type="password"
-                name="confirmPassword"
-                value={formData.confirmPassword}
-                onChange={handleChange}
-                onFocus={handleFocus}
-                onBlur={handleBlur}
-                placeholder="Re-enter your password"
-                className={`mt-2 w-full rounded-2xl border bg-white px-4 py-3 shadow-sm outline-none transition focus:border-indigo-300 focus:shadow-lg focus:shadow-indigo-100 ${fieldBorder('confirmPassword', formData.confirmPassword)}`}
-              />
+              <div className="relative mt-2">
+                <input
+                  required
+                  type={showConfirmPassword ? 'text' : 'password'}
+                  name="confirmPassword"
+                  value={formData.confirmPassword}
+                  onChange={handleChange}
+                  onFocus={handleFocus}
+                  onBlur={handleBlur}
+                  placeholder="Re-enter your password"
+                  className={`w-full rounded-2xl border bg-white px-4 py-3 pr-12 shadow-sm outline-none transition focus:border-indigo-300 focus:shadow-lg focus:shadow-indigo-100 ${fieldBorder('confirmPassword', formData.confirmPassword)}`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword((prev) => !prev)}
+                  className="absolute inset-y-0 right-0 grid place-items-center px-4 text-slate-400 transition hover:text-slate-600"
+                  aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                >
+                  {showConfirmPassword ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-5 w-5">
+                      <path d="M3 3l18 18" />
+                      <path d="M10.58 10.58A2 2 0 0 0 13.42 13.42" />
+                      <path d="M9.36 5.73A10.94 10.94 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16.78 16.78 0 0 1-3.37 4.4" />
+                      <path d="M6.6 6.6A16.53 16.53 0 0 0 2.5 12s3.5 6.5 9.5 6.5a10.6 10.6 0 0 0 4.07-.82" />
+                    </svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-5 w-5">
+                      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />
+                      <circle cx="12" cy="12" r="2.5" />
+                    </svg>
+                  )}
+                </button>
+              </div>
               {strengthConfirm ? (
                 <>
                   <div className="mt-2 flex items-center gap-2">
@@ -548,7 +638,7 @@ const SignUpPage = () => {
                 disabled={submitting}
                 className="w-full rounded-2xl bg-gradient-to-r from-indigo-500 to-pink-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-200 transition hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-pink-200 disabled:cursor-not-allowed disabled:opacity-70"
               >
-                {submitting ? 'Submitting...' : 'Create Account'}
+                {submitting ? 'Submitting...' : signupOtpRequired ? 'Resubmit Signup' : 'Create Account'}
               </button>
               <Link
                 to="/signin"
@@ -559,6 +649,29 @@ const SignUpPage = () => {
             </div>
             <div className="text-xs text-slate-500">Fill all required fields to complete the form.</div>
           </div>
+          {signupOtpRequired ? (
+            <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 px-4 py-4">
+              <p className="text-sm font-semibold text-indigo-700">Email Verification Required</p>
+              <p className="mt-1 text-xs text-indigo-600">Enter the 6-digit OTP sent to your email, then you will be redirected to dashboard.</p>
+              <div className="mt-3 flex flex-col gap-3 md:flex-row">
+                <input
+                  type="text"
+                  value={signupOtp}
+                  onChange={(e) => setSignupOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="Enter OTP"
+                  className="w-full rounded-2xl border border-indigo-200 bg-white px-4 py-3 text-sm shadow-sm outline-none transition focus:border-indigo-300"
+                />
+                <button
+                  type="button"
+                  onClick={handleVerifySignupOtp}
+                  disabled={submitting}
+                  className="w-full rounded-2xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white shadow transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-70 md:w-auto"
+                >
+                  {submitting ? 'Verifying...' : 'Verify OTP'}
+                </button>
+              </div>
+            </div>
+          ) : null}
           {status.message ? (
             <p className={`text-xs text-center ${status.error ? 'text-red-500' : 'text-emerald-600'}`}>{status.message}</p>
           ) : null}

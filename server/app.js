@@ -3,6 +3,7 @@ const cors = require('cors')
 const multer = require('multer')
 const path = require('path')
 const fs = require('fs')
+const Mailjet = require('node-mailjet')
 const bcrypt = require('bcryptjs')
 const cookieParser = require('cookie-parser')
 const crypto = require('crypto')
@@ -28,9 +29,8 @@ if (!fs.existsSync(uploadDir)) {
 	fs.mkdirSync(uploadDir, { recursive: true })
 }
 
-/* OTP flow temporarily disabled
-const otpStore = new Map()
-*/
+const passwordResetStore = new Map()
+const pendingSignupStore = new Map()
 const allowedDomains = new Set(['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'zoho.com', 'icloud.com', 'proton.me', 'aol.com'])
 
 const cookieOptions = {
@@ -74,6 +74,22 @@ const revokeUserSessions = async (userId) => {
 	await prisma.session.deleteMany({ where: { userId } })
 }
 
+const safeDeleteUpload = async (filename) => {
+	if (!filename) return
+	const filePath = path.join(uploadDir, filename)
+	try {
+		await fs.promises.unlink(filePath)
+	} catch (err) {
+		if (err?.code !== 'ENOENT') {
+			console.warn('[UPLOAD DELETE WARNING]', err.message)
+		}
+	}
+}
+
+const safeDeleteUploads = async (filenames = []) => {
+	await Promise.all((filenames || []).filter(Boolean).map((name) => safeDeleteUpload(name)))
+}
+
 const deleteSessionByToken = async (token) => {
 	if (!token) return
 	await prisma.session.deleteMany({ where: { token } })
@@ -105,6 +121,197 @@ const clearSession = async (req, res) => {
 	}
 	res.clearCookie(SESSION_COOKIE, cookieOptions)
 }
+
+const requireAuth = async (req, res, next) => {
+	try {
+		const session = await getSessionFromRequest(req)
+		if (!session) {
+			await clearSession(req, res)
+			return res.status(401).json({ message: 'Not authenticated' })
+		}
+		req.session = session
+		req.currentUser = session.user
+		return next()
+	} catch (err) {
+		return res.status(500).json({ message: err.message || 'Authentication failed' })
+	}
+}
+
+const isValidEmail = (email) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(email || ''))
+
+const validateStrongPassword = (password) => {
+	if (!password || password.length < 8) return 'Password must be at least 8 characters'
+	if (!/[A-Z]/.test(password)) return 'Password needs an uppercase letter'
+	if (!/[a-z]/.test(password)) return 'Password needs a lowercase letter'
+	if (!/\d/.test(password)) return 'Password needs a number'
+	if (!/[^A-Za-z0-9]/.test(password)) return 'Password needs a special character'
+	if (/(123|abc|password|qwerty)/i.test(password)) return 'Password is too common'
+	return ''
+}
+
+const hashOtp = (email, otp) => crypto.createHash('sha256').update(`${String(email).toLowerCase()}:${otp}`).digest('hex')
+
+const buildOtpEmailTemplate = ({ otp, purpose = 'reset', brandName = 'DRVL', appUrl = '' }) => {
+	const isSignup = purpose === 'signup'
+	const title = isSignup ? 'Verify Your Email' : 'Reset Your Password'
+	const subtitle = isSignup
+		? 'Use this OTP to verify your email and activate your new account.'
+		: 'Use this OTP to reset your password securely.'
+	const supportText = appUrl
+		? `If you did not request this, please ignore this email or visit ${appUrl}.`
+		: 'If you did not request this, please ignore this email.'
+
+	const subject = isSignup ? `${brandName} signup verification OTP` : `${brandName} password reset OTP`
+	const text = [
+		title,
+		`Your OTP is: ${otp}`,
+		'It expires in 10 minutes.',
+		supportText,
+	].join('\n')
+
+	const html = `
+<div style="margin:0;padding:24px;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e2e8f0;">
+    <tr>
+      <td style="background:linear-gradient(90deg,#0ea5e9,#2563eb);padding:20px 24px;color:#ffffff;">
+        <div style="font-size:20px;font-weight:700;">${brandName}</div>
+        <div style="font-size:13px;opacity:0.95;margin-top:4px;">Secure One-Time Password</div>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:26px 24px;">
+        <h2 style="margin:0 0 8px 0;font-size:22px;line-height:1.3;color:#0f172a;">${title}</h2>
+        <p style="margin:0 0 20px 0;font-size:14px;line-height:1.6;color:#334155;">${subtitle}</p>
+        <div style="text-align:center;margin:0 0 20px 0;">
+          <div style="display:inline-block;padding:14px 22px;border:1px dashed #93c5fd;border-radius:10px;background:#eff6ff;">
+            <span style="font-size:30px;letter-spacing:6px;font-weight:700;color:#1d4ed8;">${otp}</span>
+          </div>
+        </div>
+        <p style="margin:0 0 8px 0;font-size:13px;color:#475569;">This OTP will expire in <strong>10 minutes</strong>.</p>
+        <p style="margin:0;font-size:13px;color:#64748b;">${supportText}</p>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:14px 24px;border-top:1px solid #e2e8f0;background:#f8fafc;font-size:12px;color:#64748b;">
+        This is a transactional message from ${brandName}. Please do not reply to this email.
+      </td>
+    </tr>
+  </table>
+</div>`.trim()
+
+	return { subject, text, html }
+}
+
+const sendPasswordResetOtpEmail = async (email, otp, purpose = 'reset') => {
+	const {
+		MAILJET_API_KEY,
+		MAILJET_API_SECRET,
+		MAILJET_FROM_EMAIL,
+		MAILJET_FROM_NAME,
+		MAIL_REPLY_TO,
+		MAIL_BRAND_NAME,
+		APP_URL,
+		MAILJET_TEST_MODE,
+		MAILJET_TEST_EMAIL,
+		MAIL_OTP_DEBUG,
+	} = process.env
+
+	if (!MAILJET_API_KEY || !MAILJET_API_SECRET || !MAILJET_FROM_EMAIL) {
+		throw new Error('Mailjet is not configured. Set MAILJET_API_KEY, MAILJET_API_SECRET and MAILJET_FROM_EMAIL')
+	}
+
+	const isTestMode = String(MAILJET_TEST_MODE || '').toLowerCase() === 'true'
+	const targetEmail = isTestMode && MAILJET_TEST_EMAIL ? MAILJET_TEST_EMAIL : email
+	const testNotice = isTestMode && targetEmail !== email ? `<p><strong>Intended recipient:</strong> ${email}</p>` : ''
+	const debugEnabled = String(MAIL_OTP_DEBUG || '').toLowerCase() === 'true'
+	const brandName = MAIL_BRAND_NAME || MAILJET_FROM_NAME || 'DRVL'
+	const template = buildOtpEmailTemplate({ otp, purpose, brandName, appUrl: APP_URL || '' })
+
+	if (debugEnabled) {
+		console.log('[OTP DEBUG] Mail attempt started', {
+			fromEmail: MAILJET_FROM_EMAIL,
+			fromName: MAILJET_FROM_NAME || 'DRVL',
+			inputEmail: email,
+			targetEmail,
+			isTestMode,
+			purpose,
+			otp,
+			timestamp: new Date().toISOString(),
+		})
+	}
+
+	const payload = {
+		Messages: [
+			{
+				From: {
+					Email: MAILJET_FROM_EMAIL,
+					Name: MAILJET_FROM_NAME || brandName,
+				},
+				To: [{ Email: targetEmail }],
+				ReplyTo: {
+					Email: MAIL_REPLY_TO || MAILJET_FROM_EMAIL,
+					Name: brandName,
+				},
+				Subject: template.subject,
+				TextPart: template.text,
+				HTMLPart: `${testNotice}${template.html}`,
+				CustomID: `${purpose}-otp-${Date.now()}`,
+				Headers: {
+					'X-OTP-Purpose': purpose,
+					'X-Entity-Ref-ID': `${purpose}-${Date.now()}`,
+				},
+			},
+		],
+	}
+
+	const mailjet = Mailjet.apiConnect(MAILJET_API_KEY, MAILJET_API_SECRET)
+	try {
+		const result = await mailjet.post('send', { version: 'v3.1' }).request(payload)
+		const messageResult = result?.body?.Messages?.[0] || {}
+		const deliveryStatus = String(messageResult?.Status || '').toLowerCase()
+		const toList = Array.isArray(messageResult?.To) ? messageResult.To : []
+		const errorList = Array.isArray(messageResult?.Errors) ? messageResult.Errors : []
+
+		if (debugEnabled) {
+			console.log('[OTP DEBUG] Mailjet success response', {
+				statusCode: result?.response?.status,
+				deliveryStatus: messageResult?.Status,
+				messageId: messageResult?.To?.[0]?.MessageID,
+				messageUUID: messageResult?.To?.[0]?.MessageUUID,
+				to: toList,
+				errors: errorList,
+				body: result?.body,
+			})
+		}
+
+		if (deliveryStatus !== 'success') {
+			throw new Error(`Mailjet message rejected: ${JSON.stringify({ status: messageResult?.Status, errors: errorList })}`)
+		}
+
+		return { targetEmail, isTestMode, providerResponse: result?.body }
+	} catch (err) {
+		const statusCode = err?.statusCode || err?.response?.status || 500
+		const body = err?.response?.data || err?.message || 'Unknown error'
+		console.error('[OTP DEBUG] Mailjet send failed', {
+			statusCode,
+			inputEmail: email,
+			targetEmail,
+			isTestMode,
+			otp,
+			errorBody: body,
+		})
+		throw new Error(`Mailjet request failed (${statusCode}): ${typeof body === 'string' ? body : JSON.stringify(body)}`)
+	}
+}
+
+const findUserByEmailInsensitive = (email) => prisma.user.findFirst({
+	where: {
+		email: {
+			equals: email,
+			mode: 'insensitive',
+		},
+	},
+})
 
 const storage = multer.diskStorage({
 	destination: (_, __, cb) => cb(null, uploadDir),
@@ -171,77 +378,306 @@ app.post('/api/signout', async (req, res) => {
 	return res.json({ message: 'Signed out' })
 })
 
-/* OTP flow temporarily disabled
-const sendOtpEmail = async (email, otp) => {
-	const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM } = process.env
-
-	console.log('Drvl SMTP Config:', { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM }) // Don't log the password
-
-	if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS || !SMTP_FROM) {
-		throw new Error('SMTP environment variables are not set')
-	}
-
-	const transporter = nodemailer.createTransport({
-		service: 'gmail',
-		auth: {
-			user: SMTP_USER,
-			pass: SMTP_PASS,
-		},
-	})
-
-	transporter.verify((err, success) => {
-		if (err) {
-			console.log(err)
-		} else {
-			console.log('Server ready')
-		}
-	})
-
-	console.log(`[OTP] Sending to ${email}: ${otp}`)
-
-	await transporter.sendMail({
-		from: SMTP_FROM,
-		to: email,
-		subject: 'Your verification code',
-		text: `Your verification code is ${otp}. It expires in 10 minutes.`,
-		html: `<p>Your verification code is <strong>${otp}</strong>.</p><p>It expires in 10 minutes.</p>`,
-	})
-}
-*/
-
-/* OTP routes temporarily disabled
-app.post('/api/otp/send', async (req, res) => {
+app.get('/api/users', requireAuth, async (_req, res) => {
 	try {
-		const { email } = req.body || {}
-		if (!email) return res.status(400).json({ message: 'Email is required' })
-		const domain = email.split('@')[1]?.toLowerCase()
+		const users = await prisma.user.findMany({
+			orderBy: { createdAt: 'desc' },
+		})
+		return res.json({ users: users.map(sanitizeUser) })
+	} catch (err) {
+		return res.status(500).json({ message: err.message || 'Failed to load users' })
+	}
+})
+
+app.patch('/api/users/:id/status', requireAuth, async (req, res) => {
+	try {
+		const { id } = req.params
+		const { isActive } = req.body || {}
+
+		if (typeof isActive !== 'boolean') {
+			return res.status(400).json({ message: 'isActive boolean is required' })
+		}
+
+		if (req.currentUser?.id === id && !isActive) {
+			return res.status(400).json({ message: 'You cannot disable your own account' })
+		}
+
+		const updatedUser = await prisma.user.update({
+			where: { id },
+			data: { isActive },
+		})
+
+		if (!isActive) {
+			await revokeUserSessions(id)
+		}
+
+		return res.json({ message: 'User status updated', user: sanitizeUser(updatedUser) })
+	} catch (err) {
+		if (err?.code === 'P2025') {
+			return res.status(404).json({ message: 'User not found' })
+		}
+		return res.status(500).json({ message: err.message || 'Failed to update status' })
+	}
+})
+
+app.patch('/api/users/:id', requireAuth, upload.single('profileImage'), async (req, res) => {
+	try {
+		const { id } = req.params
+		const existingUser = await prisma.user.findUnique({ where: { id } })
+
+		if (!existingUser) {
+			if (req.file?.filename) {
+				await safeDeleteUpload(req.file.filename)
+			}
+			return res.status(404).json({ message: 'User not found' })
+		}
+
+		const {
+			fullName,
+			gender,
+			dob,
+			countryCode,
+			mobileNumber,
+			isActive,
+		} = req.body || {}
+
+		const data = {}
+
+		if (fullName !== undefined) {
+			if (!fullName.trim()) return res.status(400).json({ message: 'Full name cannot be empty' })
+			if (!/^[A-Za-z ]+$/.test(fullName)) return res.status(400).json({ message: 'Only letters and spaces allowed in name' })
+			data.fullName = fullName.trim()
+		}
+
+		if (gender !== undefined) {
+			const allowedGender = new Set(['male', 'female', 'other'])
+			const normalizedGender = String(gender || '').trim().toLowerCase()
+			if (normalizedGender && !allowedGender.has(normalizedGender)) return res.status(400).json({ message: 'Invalid gender value' })
+			data.gender = normalizedGender
+		}
+
+		if (dob !== undefined) {
+			if (!dob) return res.status(400).json({ message: 'Date of birth cannot be empty' })
+			const parsedDob = new Date(dob)
+			if (Number.isNaN(parsedDob.getTime())) return res.status(400).json({ message: 'Invalid date of birth' })
+			data.dob = parsedDob
+		}
+
+		if (countryCode !== undefined) {
+			if (!countryCode.trim()) return res.status(400).json({ message: 'Country code cannot be empty' })
+			data.countryCode = countryCode.trim()
+		}
+
+		if (mobileNumber !== undefined) {
+			if (!mobileNumber.trim()) return res.status(400).json({ message: 'Mobile number cannot be empty' })
+			data.mobileNumber = mobileNumber.trim()
+		}
+
+		if (isActive !== undefined) {
+			let normalizedIsActive = isActive
+			if (typeof normalizedIsActive === 'string') {
+				normalizedIsActive = normalizedIsActive.toLowerCase() === 'true'
+			}
+			if (typeof normalizedIsActive !== 'boolean') return res.status(400).json({ message: 'isActive must be true or false' })
+			if (req.currentUser?.id === id && !normalizedIsActive) {
+				return res.status(400).json({ message: 'You cannot disable your own account' })
+			}
+			data.isActive = normalizedIsActive
+		}
+
+		if (req.file?.filename) {
+			data.profileImagePath = req.file.filename
+		}
+
+		if (!Object.keys(data).length) {
+			if (req.file?.filename) {
+				await safeDeleteUpload(req.file.filename)
+			}
+			return res.status(400).json({ message: 'No editable fields provided' })
+		}
+
+		const user = await prisma.user.update({
+			where: { id },
+			data,
+		})
+
+		if (data.isActive === false) {
+			await revokeUserSessions(id)
+		}
+
+		if (data.profileImagePath && existingUser.profileImagePath && existingUser.profileImagePath !== data.profileImagePath) {
+			await safeDeleteUpload(existingUser.profileImagePath)
+		}
+
+		return res.json({ message: 'User updated', user: sanitizeUser(user) })
+	} catch (err) {
+		if (req.file?.filename) {
+			await safeDeleteUpload(req.file.filename)
+		}
+		if (err?.code === 'P2025') {
+			return res.status(404).json({ message: 'User not found' })
+		}
+		return res.status(500).json({ message: err.message || 'Failed to update user' })
+	}
+})
+
+app.delete('/api/users/:id', requireAuth, async (req, res) => {
+	try {
+		const { id } = req.params
+
+		if (req.currentUser?.id === id) {
+			return res.status(400).json({ message: 'You cannot delete your own account' })
+		}
+
+		const user = await prisma.user.findUnique({ where: { id } })
+		if (!user) {
+			return res.status(404).json({ message: 'User not found' })
+		}
+
+		await prisma.$transaction([
+			prisma.session.deleteMany({ where: { userId: id } }),
+			prisma.user.delete({ where: { id } }),
+		])
+
+		await Promise.all([
+			safeDeleteUpload(user.profileImagePath),
+			safeDeleteUpload(user.documentPath),
+		])
+
+		return res.json({ message: 'User deleted successfully' })
+	} catch (err) {
+		if (err?.code === 'P2025') {
+			return res.status(404).json({ message: 'User not found' })
+		}
+		return res.status(500).json({ message: err.message || 'Failed to delete user' })
+	}
+})
+
+app.post('/api/password/forgot', async (req, res) => {
+	try {
+		const { email = '' } = req.body || {}
+		const normalizedEmail = String(email).trim().toLowerCase()
+
+		if (!isValidEmail(normalizedEmail)) {
+			return res.status(400).json({ message: 'Valid email is required' })
+		}
+		const domain = normalizedEmail.split('@')[1]?.toLowerCase()
 		if (!domain || !allowedDomains.has(domain)) {
 			return res.status(400).json({ message: 'Use a popular email domain (gmail.com, yahoo.com, outlook.com, hotmail.com, zoho.com, icloud.com, proton.me, aol.com)' })
 		}
-		const otp = Math.floor(100000 + Math.random() * 900000).toString()
-		const expires = Date.now() + 10 * 60 * 1000
-		otpStore.set(email, { otp, expires })
-		await sendOtpEmail(email, otp)
-		return res.json({ message: 'OTP sent' })
+
+		const user = await findUserByEmailInsensitive(normalizedEmail)
+		if (!user) {
+			return res.status(404).json({ message: 'Email is not registered' })
+		}
+
+		const existing = passwordResetStore.get(normalizedEmail)
+		if (existing?.lastSentAt && Date.now() - existing.lastSentAt < 30 * 1000) {
+			return res.status(429).json({ message: 'Please wait before requesting another OTP' })
+		}
+
+		const otp = String(Math.floor(100000 + Math.random() * 900000))
+		const mailInfo = await sendPasswordResetOtpEmail(normalizedEmail, otp, 'reset')
+
+		passwordResetStore.set(normalizedEmail, {
+			otpHash: hashOtp(normalizedEmail, otp),
+			expiresAt: Date.now() + 10 * 60 * 1000,
+			verifiedUntil: 0,
+			attempts: 0,
+			lastSentAt: Date.now(),
+		})
+
+		return res.json({
+			message: mailInfo?.isTestMode && mailInfo?.targetEmail
+				? `OTP sent to test mailbox: ${mailInfo.targetEmail}`
+				: 'OTP sent to your email',
+			routedTo: mailInfo?.targetEmail || normalizedEmail,
+			testMode: Boolean(mailInfo?.isTestMode),
+		})
 	} catch (err) {
+		console.error('[OTP DEBUG] /api/password/forgot failed', err)
 		return res.status(500).json({ message: err.message || 'Failed to send OTP' })
 	}
 })
 
-app.post('/api/otp/verify', (req, res) => {
-	const { email, otp } = req.body || {}
-	if (!email || !otp) return res.status(400).json({ message: 'Email and OTP are required' })
-	const entry = otpStore.get(email)
-	if (!entry) return res.status(400).json({ message: 'OTP not found or expired' })
-	if (Date.now() > entry.expires) {
-		otpStore.delete(email)
-		return res.status(400).json({ message: 'OTP expired' })
+app.post('/api/password/verify-otp', async (req, res) => {
+	try {
+		const { email = '', otp = '' } = req.body || {}
+		const normalizedEmail = String(email).trim().toLowerCase()
+		const normalizedOtp = String(otp).trim()
+		if (!isValidEmail(normalizedEmail) || !/^\d{6}$/.test(normalizedOtp)) {
+			return res.status(400).json({ message: 'Valid email and 6-digit OTP are required' })
+		}
+
+		const entry = passwordResetStore.get(normalizedEmail)
+		if (!entry) {
+			return res.status(400).json({ message: 'OTP not found. Request a new OTP' })
+		}
+		if (Date.now() > entry.expiresAt) {
+			passwordResetStore.delete(normalizedEmail)
+			return res.status(400).json({ message: 'OTP expired. Request a new OTP' })
+		}
+
+		if (entry.attempts >= 5) {
+			passwordResetStore.delete(normalizedEmail)
+			return res.status(429).json({ message: 'Too many invalid attempts. Request a new OTP' })
+		}
+
+		if (entry.otpHash !== hashOtp(normalizedEmail, normalizedOtp)) {
+			entry.attempts += 1
+			passwordResetStore.set(normalizedEmail, entry)
+			return res.status(400).json({ message: 'Invalid OTP' })
+		}
+
+		entry.verifiedUntil = Date.now() + 10 * 60 * 1000
+		entry.attempts = 0
+		passwordResetStore.set(normalizedEmail, entry)
+		return res.json({ message: 'OTP verified. You can now set a new password' })
+	} catch (err) {
+		return res.status(500).json({ message: err.message || 'Failed to verify OTP' })
 	}
-	if (entry.otp !== otp) return res.status(400).json({ message: 'Invalid OTP' })
-	otpStore.delete(email)
-	return res.json({ message: 'OTP verified' })
 })
-*/
+
+app.post('/api/password/reset', async (req, res) => {
+	try {
+		const { email = '', password = '', confirmPassword = '' } = req.body || {}
+		const normalizedEmail = String(email).trim().toLowerCase()
+
+		if (!isValidEmail(normalizedEmail)) {
+			return res.status(400).json({ message: 'Valid email is required' })
+		}
+		const passwordError = validateStrongPassword(password)
+		if (passwordError) {
+			return res.status(400).json({ message: passwordError })
+		}
+		if (password !== confirmPassword) {
+			return res.status(400).json({ message: 'Passwords do not match' })
+		}
+
+		const entry = passwordResetStore.get(normalizedEmail)
+		if (!entry || !entry.verifiedUntil || Date.now() > entry.verifiedUntil) {
+			return res.status(400).json({ message: 'OTP verification is required before password reset' })
+		}
+
+		const user = await findUserByEmailInsensitive(normalizedEmail)
+		if (!user) {
+			passwordResetStore.delete(normalizedEmail)
+			return res.status(404).json({ message: 'Email is not registered' })
+		}
+
+		const passwordHash = await bcrypt.hash(password, 10)
+		await prisma.user.update({
+			where: { id: user.id },
+			data: { passwordHash, updatedAt: new Date() },
+		})
+
+		await revokeUserSessions(user.id)
+		passwordResetStore.delete(normalizedEmail)
+		return res.json({ message: 'Password updated successfully. Please sign in.' })
+	} catch (err) {
+		return res.status(500).json({ message: err.message || 'Failed to reset password' })
+	}
+})
 
 app.post(
 	'/api/signup',
@@ -296,51 +732,143 @@ app.post(
 			}
 
 			if (errors.length) {
+				await safeDeleteUploads([profileFile?.filename, docFile?.filename])
 				return res.status(400).json({ message: errors.join(', ') })
 			}
 
-			const passwordHash = await bcrypt.hash(password, 10)
-			const dobDate = new Date(dob)
-			const now = new Date()
-			const user = await prisma.user.create({
-				data: {
-					fullName,
-					gender,
-					dob: dobDate,
-					email,
-					passwordHash,
-					countryCode,
-					mobileNumber,
-					profileImagePath: profileFile?.filename || '',
-					documentPath: docFile?.filename || '',
-					lastLogin: now,
-				},
+			const normalizedEmail = String(email).trim().toLowerCase()
+			const existingUser = await findUserByEmailInsensitive(normalizedEmail)
+			if (existingUser) {
+				await safeDeleteUploads([profileFile?.filename, docFile?.filename])
+				return res.status(409).json({ message: 'Email is already registered' })
+			}
+
+			for (const [token, pending] of pendingSignupStore.entries()) {
+				if (pending?.email === normalizedEmail) {
+					await safeDeleteUploads([pending.profileImagePath, pending.documentPath])
+					pendingSignupStore.delete(token)
+				}
+			}
+
+			const signupToken = crypto.randomBytes(24).toString('hex')
+			const signupOtp = String(Math.floor(100000 + Math.random() * 900000))
+			await sendPasswordResetOtpEmail(normalizedEmail, signupOtp, 'signup')
+
+			pendingSignupStore.set(signupToken, {
+				email: normalizedEmail,
+				otpHash: hashOtp(normalizedEmail, signupOtp),
+				expiresAt: Date.now() + 10 * 60 * 1000,
+				attempts: 0,
+				fullName: fullName.trim(),
+				gender,
+				dob,
+				password,
+				countryCode,
+				mobileNumber,
+				profileImagePath: profileFile?.filename || '',
+				documentPath: docFile?.filename || '',
 			})
 
-			await revokeUserSessions(user.id)
-			await createSession(res, user.id)
-
 			return res.json({
-				message: 'Signup received',
-				user: sanitizeUser(user),
+				message: 'Signup OTP sent to your email',
+				requiresOtp: true,
+				signupToken,
 			})
 		} catch (err) {
 			console.error('[SIGNUP ERROR]', err)
 			if (err?.code === 'P2002') {
+				const profileFile = req.files?.profileImage?.[0]
+				const docFile = req.files?.document?.[0]
+				await safeDeleteUploads([profileFile?.filename, docFile?.filename])
 				return res.status(409).json({ message: 'Email is already registered' })
 			}
+			const profileFile = req.files?.profileImage?.[0]
+			const docFile = req.files?.document?.[0]
+			await safeDeleteUploads([profileFile?.filename, docFile?.filename])
 			return res.status(500).json({ message: err.message || 'Server error' })
 		}
 	},
 )
 
+app.post('/api/signup/verify-otp', async (req, res) => {
+	try {
+		const { signupToken = '', otp = '' } = req.body || {}
+		const normalizedToken = String(signupToken).trim()
+		const normalizedOtp = String(otp).trim()
+
+		if (!normalizedToken || !/^\d{6}$/.test(normalizedOtp)) {
+			return res.status(400).json({ message: 'Signup token and 6-digit OTP are required' })
+		}
+
+		const pending = pendingSignupStore.get(normalizedToken)
+		if (!pending) {
+			return res.status(400).json({ message: 'Signup OTP session not found. Please sign up again.' })
+		}
+
+		if (Date.now() > pending.expiresAt) {
+			await safeDeleteUploads([pending.profileImagePath, pending.documentPath])
+			pendingSignupStore.delete(normalizedToken)
+			return res.status(400).json({ message: 'Signup OTP expired. Please sign up again.' })
+		}
+
+		if (pending.attempts >= 5) {
+			await safeDeleteUploads([pending.profileImagePath, pending.documentPath])
+			pendingSignupStore.delete(normalizedToken)
+			return res.status(429).json({ message: 'Too many invalid attempts. Please sign up again.' })
+		}
+
+		if (pending.otpHash !== hashOtp(pending.email, normalizedOtp)) {
+			pending.attempts += 1
+			pendingSignupStore.set(normalizedToken, pending)
+			return res.status(400).json({ message: 'Invalid signup OTP' })
+		}
+
+		const existingUser = await findUserByEmailInsensitive(pending.email)
+		if (existingUser) {
+			await safeDeleteUploads([pending.profileImagePath, pending.documentPath])
+			pendingSignupStore.delete(normalizedToken)
+			return res.status(409).json({ message: 'Email is already registered' })
+		}
+
+		const passwordHash = await bcrypt.hash(pending.password, 10)
+		const dobDate = new Date(pending.dob)
+		const now = new Date()
+		const user = await prisma.user.create({
+			data: {
+				fullName: pending.fullName,
+				gender: pending.gender,
+				dob: dobDate,
+				email: pending.email,
+				passwordHash,
+				countryCode: pending.countryCode,
+				mobileNumber: pending.mobileNumber,
+				profileImagePath: pending.profileImagePath,
+				documentPath: pending.documentPath,
+				lastLogin: now,
+			},
+		})
+
+		await revokeUserSessions(user.id)
+		await createSession(res, user.id)
+		pendingSignupStore.delete(normalizedToken)
+
+		return res.json({
+			message: 'Signup verified successfully',
+			user: sanitizeUser(user),
+		})
+	} catch (err) {
+		return res.status(500).json({ message: err.message || 'Failed to verify signup OTP' })
+	}
+})
+
 app.post('/api/signin', async (req, res) => {
 	try {
 		const { email = '', password = '' } = req.body || {}
-		if (!email || !password) {
+		const normalizedEmail = String(email).trim().toLowerCase()
+		if (!normalizedEmail || !password) {
 			return res.status(400).json({ message: 'Email and password are required' })
 		}
-		const user = await prisma.user.findUnique({ where: { email } })
+		const user = await findUserByEmailInsensitive(normalizedEmail)
 		if (!user) {
 			return res.status(401).json({ message: 'Invalid credentials' })
 		}
