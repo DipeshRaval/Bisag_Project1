@@ -30,10 +30,40 @@ const ForgotPasswordPage = () => {
   const [otp, setOtp] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [touched, setTouched] = useState({ password: false, confirmPassword: false })
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
 
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+
+  const passwordStrength = (value) => {
+    const checks = [
+      /[a-z]/.test(value),
+      /[A-Z]/.test(value),
+      /\d/.test(value),
+      /[^A-Za-z0-9]/.test(value),
+      value.length >= 8,
+    ]
+    const score = checks.filter(Boolean).length
+    const percent = (score / checks.length) * 100
+    let label = 'Weak'
+    if (percent >= 80) label = 'Strong'
+    else if (percent >= 60) label = 'Good'
+    else if (percent >= 40) label = 'Fair'
+    return { percent, label }
+  }
+
+  const requirementList = (value, compare) => [
+    { label: 'At least 8 characters', ok: Boolean(value) && value.length >= 8 },
+    { label: '1 uppercase letter', ok: Boolean(value) && /[A-Z]/.test(value) },
+    { label: '1 lowercase letter', ok: Boolean(value) && /[a-z]/.test(value) },
+    { label: '1 number', ok: Boolean(value) && /\d/.test(value) },
+    { label: '1 special character', ok: Boolean(value) && /[^A-Za-z0-9]/.test(value) },
+    { label: 'Avoid common patterns', ok: Boolean(value) && !/(123|abc|password|qwerty)/i.test(value) },
+    compare !== undefined ? { label: 'Matches password', ok: Boolean(value) && value === compare } : null,
+  ].filter(Boolean)
 
   const handleSendOtp = async (e) => {
     e.preventDefault()
@@ -160,6 +190,26 @@ const ForgotPasswordPage = () => {
     }
   }
 
+  const showPasswordFeedback = touched.password && password.length > 0
+  const passwordValidationError = validatePassword(password)
+  const passwordMeter = showPasswordFeedback
+    ? passwordValidationError
+      ? { percent: 20, label: 'Invalid' }
+      : passwordStrength(password)
+    : null
+
+  const showConfirmFeedback = touched.confirmPassword && confirmPassword.length > 0
+  const confirmValidationError = !confirmPassword
+    ? 'Confirm your password'
+    : confirmPassword !== password
+      ? 'Passwords must match'
+      : ''
+  const confirmMeter = showConfirmFeedback
+    ? confirmValidationError
+      ? { percent: 20, label: 'Invalid' }
+      : passwordStrength(confirmPassword)
+    : null
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#dbeafe] via-white to-[#e0e7ff] px-4 py-10 font-['Manrope',system-ui,sans-serif] text-slate-900">
       <div className="mx-auto w-full max-w-md rounded-3xl border border-white/70 bg-white/80 px-8 py-10 shadow-2xl shadow-indigo-100 backdrop-blur">
@@ -241,24 +291,104 @@ const ForgotPasswordPage = () => {
           <form className="mt-8 space-y-4" onSubmit={handleResetPassword}>
             <label className="block text-sm font-medium text-slate-700">
               <span className="mb-2 block">New Password</span>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter new password"
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 shadow-sm outline-none transition focus:border-indigo-300 focus:shadow-lg focus:shadow-indigo-100"
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onFocus={() => setTouched((prev) => ({ ...prev, password: true }))}
+                  placeholder="Enter new password"
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 pr-12 text-slate-900 shadow-sm outline-none transition focus:border-indigo-300 focus:shadow-lg focus:shadow-indigo-100"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute inset-y-0 right-0 px-4 text-xs font-semibold text-slate-500"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              {passwordMeter ? (
+                <>
+                  <div className="mt-2 flex items-center gap-2">
+                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className={`h-full transition-all ${
+                          passwordMeter.percent >= 80
+                            ? 'bg-emerald-500'
+                            : passwordMeter.percent >= 60
+                              ? 'bg-lime-500'
+                              : passwordMeter.percent >= 40
+                                ? 'bg-amber-400'
+                                : 'bg-red-400'
+                        }`}
+                        style={{ width: `${passwordMeter.percent}%` }}
+                      />
+                    </div>
+                    <span className="text-xs font-semibold text-slate-600">{passwordMeter.label}</span>
+                  </div>
+                  <ul className="mt-2 space-y-1 text-xs">
+                    {requirementList(password).map((item) => (
+                      <li key={item.label} className={`flex items-center gap-2 ${item.ok ? 'text-emerald-600' : 'text-slate-500'}`}>
+                        <span className={`h-2 w-2 rounded-full ${item.ok ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                        <span>{item.label}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
             </label>
 
             <label className="block text-sm font-medium text-slate-700">
               <span className="mb-2 block">Confirm New Password</span>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Re-enter new password"
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 shadow-sm outline-none transition focus:border-indigo-300 focus:shadow-lg focus:shadow-indigo-100"
-              />
+              <div className="relative">
+                <input
+                  type={showConfirmPassword ? 'text' : 'password'}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  onFocus={() => setTouched((prev) => ({ ...prev, confirmPassword: true }))}
+                  placeholder="Re-enter new password"
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 pr-12 text-slate-900 shadow-sm outline-none transition focus:border-indigo-300 focus:shadow-lg focus:shadow-indigo-100"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword((prev) => !prev)}
+                  className="absolute inset-y-0 right-0 px-4 text-xs font-semibold text-slate-500"
+                  aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                >
+                  {showConfirmPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              {confirmMeter ? (
+                <>
+                  <div className="mt-2 flex items-center gap-2">
+                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className={`h-full transition-all ${
+                          confirmMeter.percent >= 80
+                            ? 'bg-emerald-500'
+                            : confirmMeter.percent >= 60
+                              ? 'bg-lime-500'
+                              : confirmMeter.percent >= 40
+                                ? 'bg-amber-400'
+                                : 'bg-red-400'
+                        }`}
+                        style={{ width: `${confirmMeter.percent}%` }}
+                      />
+                    </div>
+                    <span className="text-xs font-semibold text-slate-600">{confirmMeter.label}</span>
+                  </div>
+                  <ul className="mt-2 space-y-1 text-xs">
+                    {requirementList(confirmPassword, password).map((item) => (
+                      <li key={item.label} className={`flex items-center gap-2 ${item.ok ? 'text-emerald-600' : 'text-slate-500'}`}>
+                        <span className={`h-2 w-2 rounded-full ${item.ok ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                        <span>{item.label}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
             </label>
 
             <button

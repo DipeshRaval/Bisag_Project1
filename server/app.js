@@ -420,15 +420,22 @@ app.patch('/api/users/:id/status', requireAuth, async (req, res) => {
 	}
 })
 
-app.patch('/api/users/:id', requireAuth, upload.single('profileImage'), async (req, res) => {
+app.patch(
+	'/api/users/:id',
+	requireAuth,
+	upload.fields([
+		{ name: 'profileImage', maxCount: 1 },
+		{ name: 'document', maxCount: 1 },
+	]),
+	async (req, res) => {
 	try {
 		const { id } = req.params
 		const existingUser = await prisma.user.findUnique({ where: { id } })
+		const profileFile = req.files?.profileImage?.[0]
+		const docFile = req.files?.document?.[0]
 
 		if (!existingUser) {
-			if (req.file?.filename) {
-				await safeDeleteUpload(req.file.filename)
-			}
+			await safeDeleteUploads([profileFile?.filename, docFile?.filename])
 			return res.status(404).json({ message: 'User not found' })
 		}
 
@@ -436,6 +443,9 @@ app.patch('/api/users/:id', requireAuth, upload.single('profileImage'), async (r
 			fullName,
 			gender,
 			dob,
+			email,
+			password,
+			confirmPassword,
 			countryCode,
 			mobileNumber,
 			isActive,
@@ -463,6 +473,45 @@ app.patch('/api/users/:id', requireAuth, upload.single('profileImage'), async (r
 			data.dob = parsedDob
 		}
 
+		if (email !== undefined) {
+			const normalizedEmail = String(email || '').trim().toLowerCase()
+			if (!normalizedEmail) return res.status(400).json({ message: 'Email is required' })
+			if (!isValidEmail(normalizedEmail)) return res.status(400).json({ message: 'Email is invalid' })
+			const domain = normalizedEmail.split('@')[1]?.toLowerCase()
+			if (!domain || !allowedDomains.has(domain)) {
+				return res.status(400).json({ message: 'Use a popular email domain (gmail.com, yahoo.com, outlook.com, hotmail.com, zoho.com, icloud.com, proton.me, aol.com)' })
+			}
+
+			if (normalizedEmail !== existingUser.email.toLowerCase()) {
+				const emailOwner = await findUserByEmailInsensitive(normalizedEmail)
+				if (emailOwner && emailOwner.id !== id) {
+					return res.status(409).json({ message: 'Email is already registered' })
+				}
+			}
+
+			data.email = normalizedEmail
+		}
+
+		if (password !== undefined || confirmPassword !== undefined) {
+			const normalizedPassword = String(password || '')
+			const normalizedConfirmPassword = String(confirmPassword || '')
+
+			if (!normalizedPassword) {
+				return res.status(400).json({ message: 'Password is required' })
+			}
+
+			const passwordError = validateStrongPassword(normalizedPassword)
+			if (passwordError) {
+				return res.status(400).json({ message: passwordError })
+			}
+
+			if (normalizedPassword !== normalizedConfirmPassword) {
+				return res.status(400).json({ message: 'Passwords do not match' })
+			}
+
+			data.passwordHash = await bcrypt.hash(normalizedPassword, 10)
+		}
+
 		if (countryCode !== undefined) {
 			if (!countryCode.trim()) return res.status(400).json({ message: 'Country code cannot be empty' })
 			data.countryCode = countryCode.trim()
@@ -485,14 +534,26 @@ app.patch('/api/users/:id', requireAuth, upload.single('profileImage'), async (r
 			data.isActive = normalizedIsActive
 		}
 
-		if (req.file?.filename) {
-			data.profileImagePath = req.file.filename
+		if (profileFile && profileFile.size > 1 * 1024 * 1024) {
+			await safeDeleteUploads([profileFile.filename, docFile?.filename])
+			return res.status(400).json({ message: 'Profile image exceeds 1MB' })
+		}
+
+		if (docFile && docFile.size > 5 * 1024 * 1024) {
+			await safeDeleteUploads([profileFile?.filename, docFile.filename])
+			return res.status(400).json({ message: 'Document exceeds 5MB' })
+		}
+
+		if (profileFile?.filename) {
+			data.profileImagePath = profileFile.filename
+		}
+
+		if (docFile?.filename) {
+			data.documentPath = docFile.filename
 		}
 
 		if (!Object.keys(data).length) {
-			if (req.file?.filename) {
-				await safeDeleteUpload(req.file.filename)
-			}
+			await safeDeleteUploads([profileFile?.filename, docFile?.filename])
 			return res.status(400).json({ message: 'No editable fields provided' })
 		}
 
@@ -505,17 +566,28 @@ app.patch('/api/users/:id', requireAuth, upload.single('profileImage'), async (r
 			await revokeUserSessions(id)
 		}
 
+		if (data.passwordHash) {
+			await revokeUserSessions(id)
+		}
+
 		if (data.profileImagePath && existingUser.profileImagePath && existingUser.profileImagePath !== data.profileImagePath) {
 			await safeDeleteUpload(existingUser.profileImagePath)
 		}
 
+		if (data.documentPath && existingUser.documentPath && existingUser.documentPath !== data.documentPath) {
+			await safeDeleteUpload(existingUser.documentPath)
+		}
+
 		return res.json({ message: 'User updated', user: sanitizeUser(user) })
 	} catch (err) {
-		if (req.file?.filename) {
-			await safeDeleteUpload(req.file.filename)
-		}
+		const profileFile = req.files?.profileImage?.[0]
+		const docFile = req.files?.document?.[0]
+		await safeDeleteUploads([profileFile?.filename, docFile?.filename])
 		if (err?.code === 'P2025') {
 			return res.status(404).json({ message: 'User not found' })
+		}
+		if (err?.code === 'P2002') {
+			return res.status(409).json({ message: 'Email is already registered' })
 		}
 		return res.status(500).json({ message: err.message || 'Failed to update user' })
 	}

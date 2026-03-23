@@ -2,6 +2,7 @@ import { createBrowserRouter } from 'react-router-dom'
 import App from '../App'
 import AnalyticsPage from '../pages/AnalyticsPage'
 import DetailPage from '../pages/DetailPage'
+import EditUserPage from '../pages/EditUserPage'
 import ForgotPasswordPage from '../pages/ForgotPasswordPage'
 import SignInPage from '../pages/SignInPage'
 import SignUpPage from '../pages/SignUpPage'
@@ -23,6 +24,10 @@ const router = createBrowserRouter([
           {
             path: 'users',
             element: <UserManagementPage />,
+          },
+          {
+            path: 'users/:id/edit',
+            element: <EditUserPage />,
           },
           {
             path: 'analytics',

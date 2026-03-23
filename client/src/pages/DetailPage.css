@@ -24,12 +24,15 @@
 }
 
 .brand-logo {
-  width: 34px;
+  width: 52px;
   height: 34px;
   border-radius: 8px;
   display: grid;
   place-items: center;
+  font-size: 9px;
+  letter-spacing: 0.2px;
   font-weight: 700;
+  line-height: 1;
   background: #05070f;
   color: #9cb4ff;
 }
@@ -143,14 +146,16 @@
 }
 
 .center-logo {
-  width: 78px;
+  width: 92px;
   height: 78px;
   border-radius: 50%;
   display: grid;
   place-items: center;
   background: radial-gradient(circle at 25% 30%, #e4eaff, #f7e8ff 62%, #ebf0ff);
   color: #0f172a;
-  font-size: 31px;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  line-height: 1;
   font-weight: 700;
   box-shadow: 0 5px 16px rgba(49, 93, 214, 0.2);
 }

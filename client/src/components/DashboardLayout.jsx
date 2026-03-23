@@ -7,7 +7,7 @@ const DashboardLayout = ({ heading, subheading, sessionUser, onLogout, children,
     <div className="dashboard-shell">
       <aside className="dashboard-sidebar">
         <div className="brand-block">
-          <div className="brand-logo">L</div>
+          <div className="brand-logo">BISAG-N</div>
           <div>
             <h2>Bisag-N</h2>
             <p>Lavya Workshop</p>

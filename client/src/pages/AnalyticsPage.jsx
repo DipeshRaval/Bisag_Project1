@@ -156,6 +156,21 @@ const AnalyticsPage = () => {
     return ticks
   }, [registrationMax])
 
+  const linePoints = useMemo(() => {
+    if (!registrationSeries.length) return []
+    return registrationSeries.map((item, i) => {
+      const step = registrationSeries.length === 1 ? chartW / 2 : (i / (registrationSeries.length - 1)) * chartW
+      const x = svgPadL + step
+      const y = svgPadT + chartH - (item.value / registrationMax) * chartH
+      return { ...item, x, y }
+    })
+  }, [registrationSeries, chartW, chartH, registrationMax, svgPadL, svgPadT])
+
+  const linePath = useMemo(() => {
+    if (!linePoints.length) return ''
+    return linePoints.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')
+  }, [linePoints])
+
   /* ── Pie chart SVG helpers ── */
   const pieR = 78
   const pieCenterX = 132
@@ -292,6 +307,7 @@ const AnalyticsPage = () => {
             📊 Chart Type
             <select value={chartType} onChange={(e) => setChartType(e.target.value)}>
               <option value="bar">Bar Chart</option>
+              <option value="line">Line Chart</option>
             </select>
           </label>
           <label>
@@ -375,30 +391,51 @@ const AnalyticsPage = () => {
                     </g>
                   )
                 })}
-                {/* Bars */}
-                {registrationSeries.map((item, i) => {
-                  const barW = Math.max(Math.min(chartW / registrationSeries.length - 4, 20), 4)
-                  const barH = (item.value / registrationMax) * chartH
-                  const x = svgPadL + (i / registrationSeries.length) * chartW + (chartW / registrationSeries.length - barW) / 2
-                  const y = svgPadT + chartH - barH
-                  const labelX = x + barW / 2
-                  const labelY = svgPadT + chartH + 14
-                  return (
-                    <g key={item.key}>
-                      <rect x={x} y={y} width={barW} height={barH} rx="3" fill="url(#barGrad)" />
-                      <text
-                        x={labelX}
-                        y={labelY}
-                        textAnchor="end"
-                        fill="#667085"
-                        fontSize="9"
-                        transform={`rotate(-50, ${labelX}, ${labelY})`}
-                      >
-                        {item.label}
-                      </text>
-                    </g>
-                  )
-                })}
+                {/* Bars / Line */}
+                {chartType === 'bar'
+                  ? registrationSeries.map((item, i) => {
+                    const barW = Math.max(Math.min(chartW / registrationSeries.length - 4, 20), 4)
+                    const barH = (item.value / registrationMax) * chartH
+                    const x = svgPadL + (i / registrationSeries.length) * chartW + (chartW / registrationSeries.length - barW) / 2
+                    const y = svgPadT + chartH - barH
+                    const labelX = x + barW / 2
+                    const labelY = svgPadT + chartH + 14
+                    return (
+                      <g key={item.key}>
+                        <rect x={x} y={y} width={barW} height={barH} rx="3" fill="url(#barGrad)" />
+                        <text
+                          x={labelX}
+                          y={labelY}
+                          textAnchor="end"
+                          fill="#667085"
+                          fontSize="9"
+                          transform={`rotate(-50, ${labelX}, ${labelY})`}
+                        >
+                          {item.label}
+                        </text>
+                      </g>
+                    )
+                  })
+                  : (
+                    <>
+                      <path d={linePath} fill="none" stroke="#2f6fe8" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                      {linePoints.map((point) => (
+                        <g key={point.key}>
+                          <circle cx={point.x} cy={point.y} r="4" fill="#2f6fe8" />
+                          <text
+                            x={point.x}
+                            y={svgPadT + chartH + 14}
+                            textAnchor="end"
+                            fill="#667085"
+                            fontSize="9"
+                            transform={`rotate(-50, ${point.x}, ${svgPadT + chartH + 14})`}
+                          >
+                            {point.label}
+                          </text>
+                        </g>
+                      ))}
+                    </>
+                  )}
                 <defs>
                   <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#5195ff" />

@@ -144,7 +144,7 @@ const SignInPage = () => {
           <div className="absolute -right-6 -top-6 h-16 w-16 rounded-3xl bg-gradient-to-br from-indigo-100 to-purple-50" aria-hidden="true" />
           <div className="flex justify-center">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 shadow-lg shadow-indigo-200">
-              <span className="text-xl font-semibold text-white">L</span>
+              <span className="text-[9px] font-bold tracking-[0.2px] text-white">BISAG-N</span>
             </div>
           </div>
 
@@ -153,7 +153,7 @@ const SignInPage = () => {
             <p className="mt-2 text-sm text-slate-600">Sign in to your account</p>
           </div>
 
-          <div className="mt-8 space-y-6">
+          <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
             <div className="space-y-2">
               <Field
                 label="Email Address *"
@@ -188,9 +188,8 @@ const SignInPage = () => {
             </div>
 
             <button
-              type="button"
+              type="submit"
               className="w-full rounded-2xl bg-gradient-to-r from-indigo-500 to-pink-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-200 transition hover:shadow-xl hover:shadow-indigo-200 focus:outline-none focus:ring-2 focus:ring-pink-200 disabled:cursor-not-allowed disabled:opacity-70"
-              onClick={handleSubmit}
               disabled={submitting}
             >
               {submitting ? 'Signing In...' : 'Sign In'}
@@ -221,7 +220,7 @@ const SignInPage = () => {
             <p className="mt-4 text-center text-[11px] text-slate-500">
               By signing in, you agree to our Terms and Privacy Policy
             </p>
-          </div>
+          </form>
         </div>
       </div>
     </div>

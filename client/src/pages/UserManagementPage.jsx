@@ -5,25 +5,12 @@ import { API_BASE_URL, apiFetch } from '../utils/api'
 import { clearAuthentication } from '../utils/auth'
 import './DetailPage.css'
 
-const initialEdit = {
-  id: '',
-  fullName: '',
-  gender: '',
-  dob: '',
-  countryCode: '',
-  mobileNumber: '',
-  profileImageFile: null,
-  profileImagePreview: '',
-}
-
 const UserManagementPage = () => {
   const navigate = useNavigate()
   const [sessionUser, setSessionUser] = useState(null)
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [status, setStatus] = useState({ message: '', error: false })
-  const [editing, setEditing] = useState(initialEdit)
-  const [saving, setSaving] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [genderFilter, setGenderFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -136,91 +123,6 @@ const UserManagementPage = () => {
       setStatus({ message: `${data.user.fullName} is now ${data.user.isActive ? 'Active' : 'Disabled'}.`, error: false })
     } catch (err) {
       setStatus({ message: err.message || 'Unable to update status', error: true })
-    }
-  }
-
-  const openEdit = (user) => {
-    const preview = user.profileImagePath ? profileImageUrl(user.profileImagePath) : ''
-    setEditing({
-      id: user.id,
-      fullName: user.fullName || '',
-      gender: user.gender || '',
-      dob: user?.dob ? new Date(user.dob).toISOString().slice(0, 10) : '',
-      countryCode: user.countryCode || '',
-      mobileNumber: user.mobileNumber || '',
-      profileImageFile: null,
-      profileImagePreview: preview,
-    })
-  }
-
-  const closeEdit = () => {
-    if (editing.profileImagePreview?.startsWith('blob:')) {
-      URL.revokeObjectURL(editing.profileImagePreview)
-    }
-    setEditing(initialEdit)
-  }
-
-  const handleEditChange = (e) => {
-    const { name, value } = e.target
-    setEditing((prev) => ({ ...prev, [name]: value }))
-  }
-
-  const handleProfileImageChange = (e) => {
-    const file = e.target.files?.[0]
-    if (!file) {
-      setEditing((prev) => ({ ...prev, profileImageFile: null }))
-      return
-    }
-
-    const isJpeg = ['image/jpeg', 'image/jpg'].includes(file.type)
-    if (!isJpeg) {
-      setStatus({ message: 'Profile image must be JPG/JPEG.', error: true })
-      return
-    }
-
-    setEditing((prev) => {
-      if (prev.profileImagePreview?.startsWith('blob:')) {
-        URL.revokeObjectURL(prev.profileImagePreview)
-      }
-      return {
-        ...prev,
-        profileImageFile: file,
-        profileImagePreview: URL.createObjectURL(file),
-      }
-    })
-  }
-
-  const saveEdit = async (e) => {
-    e.preventDefault()
-    if (!editing.id) return
-
-    try {
-      setSaving(true)
-      const payload = new FormData()
-      payload.append('fullName', editing.fullName)
-      payload.append('gender', editing.gender)
-      payload.append('dob', editing.dob)
-      payload.append('countryCode', editing.countryCode)
-      payload.append('mobileNumber', editing.mobileNumber)
-
-      if (editing.profileImageFile) {
-        payload.append('profileImage', editing.profileImageFile)
-      }
-
-      const res = await apiFetch(`/api/users/${editing.id}`, {
-        method: 'PATCH',
-        body: payload,
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data?.message || 'Failed to save user')
-
-      setUsers((prev) => prev.map((u) => (u.id === editing.id ? data.user : u)))
-      setStatus({ message: 'User updated successfully.', error: false })
-      closeEdit()
-    } catch (err) {
-      setStatus({ message: err.message || 'Unable to save user', error: true })
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -420,7 +322,7 @@ const UserManagementPage = () => {
                     <td>
                       <div className="table-actions">
                         <button type="button" className="light-btn" onClick={() => openView(user)}>View</button>
-                        <button type="button" className="warn-btn" onClick={() => openEdit(user)}>Edit</button>
+                        <button type="button" className="warn-btn" onClick={() => navigate(`/users/${user.id}/edit`)}>Edit</button>
                         <button
                           type="button"
                           className="delete-btn"
@@ -482,59 +384,6 @@ const UserManagementPage = () => {
           </div>
         )}
       </section>
-
-      {editing.id ? (
-        <div className="modal-backdrop" role="presentation" onClick={closeEdit}>
-          <section className="edit-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-            <h3>Edit User</h3>
-            <p>Edit any fields below without changing email.</p>
-            <form onSubmit={saveEdit} className="edit-form">
-              <label>
-                Full Name
-                <input name="fullName" value={editing.fullName} onChange={handleEditChange} required />
-              </label>
-              <label>
-                Gender
-                <select name="gender" value={editing.gender} onChange={handleEditChange}>
-                  <option value="">Select</option>
-                  <option value="male">Male</option>
-                  <option value="female">Female</option>
-                  <option value="other">Other</option>
-                </select>
-              </label>
-              <label>
-                DOB
-                <input type="date" name="dob" value={editing.dob} onChange={handleEditChange} />
-              </label>
-              <label>
-                Country Code
-                <input name="countryCode" value={editing.countryCode} onChange={handleEditChange} />
-              </label>
-              <label>
-                Mobile Number
-                <input name="mobileNumber" value={editing.mobileNumber} onChange={handleEditChange} />
-              </label>
-              <label>
-                Profile Picture (JPG/JPEG)
-                <input type="file" accept=".jpg,.jpeg,image/jpeg" onChange={handleProfileImageChange} />
-              </label>
-              {editing.profileImagePreview ? (
-                <button
-                  type="button"
-                  className="image-view-btn preview-wrap"
-                  onClick={() => openImage(editing.profileImagePreview, 'Profile preview')}
-                >
-                  <img src={editing.profileImagePreview} alt="Profile preview" className="edit-image-preview" />
-                </button>
-              ) : null}
-              <div className="modal-actions">
-                <button type="button" className="light-btn" onClick={closeEdit}>Cancel</button>
-                <button type="submit" className="ok-btn" disabled={saving}>{saving ? 'Saving...' : 'Save Changes'}</button>
-              </div>
-            </form>
-          </section>
-        </div>
-      ) : null}
 
       {viewingUser ? (
         <div className="modal-backdrop" role="presentation" onClick={closeView}>
@@ -601,7 +450,7 @@ const UserManagementPage = () => {
 
             <div className="modal-actions p-3 pt-0">
               <button type="button" className="light-btn" onClick={closeView}>Close</button>
-              <button type="button" className="warn-btn" onClick={() => { closeView(); openEdit(viewingUser) }}>Edit</button>
+              <button type="button" className="warn-btn" onClick={() => { closeView(); navigate(`/users/${viewingUser.id}/edit`) }}>Edit</button>
               <button
                 type="button"
                 className="delete-btn"

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import DashboardLayout from '../components/DashboardLayout'
 import { apiFetch } from '../utils/api'
 import { clearAuthentication } from '../utils/auth'
@@ -61,25 +61,25 @@ const DetailPage = () => {
       onLogout={handleSignOut}
     >
       <section className="dashboard-card" aria-live="polite">
-        <div className="center-logo">L</div>
+        <div className="center-logo">BISAG-N</div>
         <h2>{firstName} Dashboard</h2>
         <p className="byline">By Lavya Workshop</p>
 
         <p className="intro">Select an option from the sidebar to get started:</p>
 
         <div className="quick-grid">
-          <article className="quick-item blue">
+          <Link to="/users" className="quick-item blue" aria-label="Go to User Management">
             <h3>User Management</h3>
             <p>Manage all users</p>
-          </article>
-          <article className="quick-item pink">
+          </Link>
+          <Link to="/analytics" className="quick-item pink" aria-label="Go to Analytics">
             <h3>Analytics</h3>
             <p>View insights &amp; reports</p>
-          </article>
-          <article className="quick-item plain">
+          </Link>
+          <Link to="/" className="quick-item plain" aria-label="Go to Dashboard Home">
             <h3>Dashboard</h3>
             <p>You are here</p>
-          </article>
+          </Link>
         </div>
 
         <p className="support-note">Need help? Contact support or refer to the documentation.</p>
