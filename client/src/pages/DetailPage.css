@@ -244,14 +244,26 @@
 .table-controls {
   width: 100%;
   display: grid;
-  grid-template-columns: 1fr auto auto auto auto;
+  grid-template-columns: 1fr auto;
   gap: 10px;
-  align-items: center;
+  align-items: start;
   background: #f7f8ff;
   border: 1px solid #ecefff;
   border-radius: 10px;
   padding: 10px;
   margin-bottom: 14px;
+}
+
+.table-controls-right {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
+.table-controls-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 .search-input {
@@ -261,6 +273,25 @@
   border-radius: 8px;
   padding: 0 12px;
   font-size: 13px;
+}
+
+.page-size-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #475467;
+  font-weight: 600;
+}
+
+.page-size-control select {
+  height: 34px;
+  border: 1px solid #d8dce8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0 8px;
+  font-size: 12px;
+  color: #344054;
 }
 
 .selected-count {
@@ -286,6 +317,14 @@
 .soft-red-btn {
   background: #f04438;
   color: #ffffff;
+}
+
+.table-controls .soft-red-btn {
+  width: auto;
+  min-width: 82px;
+  padding: 8px 12px;
+  line-height: 1.2;
+  justify-self: auto;
 }
 
 .delete-btn {
@@ -642,6 +681,46 @@
   background: #fef3f2;
   color: #b42318;
   border: 1px solid #fecdca;
+}
+
+.pagination-controls {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.pagination-label {
+  font-size: 12px;
+  color: #667085;
+}
+
+.pagination-pages {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+}
+
+.page-number-btn {
+  min-width: 32px;
+  height: 32px;
+  border: 1px solid #d0d5dd;
+  background: #ffffff;
+  color: #344054;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 8px;
+}
+
+.page-number-btn.active {
+  background: #1f7ae0;
+  border-color: #1f7ae0;
+  color: #ffffff;
 }
 
 .empty-note {
@@ -1400,6 +1479,22 @@
 
   .table-controls {
     grid-template-columns: 1fr;
+  }
+
+  .table-controls-right {
+    justify-items: start;
+  }
+
+  .table-controls-actions {
+    flex-wrap: wrap;
+  }
+
+  .table-controls .soft-red-btn {
+    width: fit-content;
+  }
+
+  .page-size-control {
+    justify-content: space-between;
   }
 
   .filter-grid,

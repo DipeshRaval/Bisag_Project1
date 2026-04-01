@@ -42,10 +42,31 @@ const countBySlots = (slots, users, dateSelector) =>
 
 const pct = (part, total) => (total ? Math.round((part / total) * 100) : 0)
 
-const formatTime = (minutes) => {
-  const h = Math.floor(minutes / 60)
-  const m = minutes % 60
-  const s = Math.floor(Math.random() * 60)
+const parseDate = (value) => {
+  if (!value) return null
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+const getSessionEffectiveEnd = (session, now = new Date()) => {
+  const endedAt = parseDate(session.endedAt)
+  if (endedAt) return endedAt
+  const expiresAt = parseDate(session.expiresAt)
+  if (expiresAt) return expiresAt < now ? expiresAt : now
+  return now
+}
+
+const overlapMs = (aStart, aEnd, bStart, bEnd) => {
+  const start = Math.max(aStart.getTime(), bStart.getTime())
+  const end = Math.min(aEnd.getTime(), bEnd.getTime())
+  return Math.max(0, end - start)
+}
+
+const formatDuration = (seconds) => {
+  const safeSeconds = Math.max(0, Math.floor(Number(seconds) || 0))
+  const h = Math.floor(safeSeconds / 3600)
+  const m = Math.floor((safeSeconds % 3600) / 60)
+  const s = safeSeconds % 60
   return `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`
 }
 
@@ -53,6 +74,7 @@ const AnalyticsPage = () => {
   const navigate = useNavigate()
   const [sessionUser, setSessionUser] = useState(null)
   const [users, setUsers] = useState([])
+  const [sessions, setSessions] = useState([])
   const [timeRange, setTimeRange] = useState('7')
   const [chartType, setChartType] = useState('bar')
   const [timeUnit, setTimeUnit] = useState('day')
@@ -67,15 +89,26 @@ const AnalyticsPage = () => {
 
   const load = async () => {
     try {
-      const [sessionRes, usersRes] = await Promise.all([
+      const now = new Date()
+      const sessionsFrom = new Date(now)
+      sessionsFrom.setDate(sessionsFrom.getDate() - 90)
+
+      const [sessionRes, usersRes, sessionsRes] = await Promise.all([
         apiFetch('/api/session', { method: 'GET' }),
         apiFetch('/api/users', { method: 'GET' }),
+        apiFetch(`/api/analytics/sessions?from=${encodeURIComponent(sessionsFrom.toISOString())}&to=${encodeURIComponent(now.toISOString())}`, { method: 'GET' }),
       ])
       if (!sessionRes.ok || !usersRes.ok) throw new Error('Session expired')
       const sessionData = await sessionRes.json()
       const usersData = await usersRes.json()
       setSessionUser(sessionData.user)
       setUsers(usersData.users || [])
+      if (sessionsRes.ok) {
+        const sessionsBody = await sessionsRes.json()
+        setSessions(sessionsBody.sessions || [])
+      } else {
+        setSessions([])
+      }
       updateTime()
     } catch (_err) {
       clearAuthentication()
@@ -112,8 +145,38 @@ const AnalyticsPage = () => {
   const activeUsers = useMemo(() => filteredUsers.filter((u) => u.isActive).length, [filteredUsers])
   const inactiveUsers = totalUsers - activeUsers
   const engagementRate = pct(activeUsers, totalUsers)
-  const activeMinutes = activeUsers * 71 + 52
-  const totalSessions = Math.max(filteredUsers.length, 2)
+
+  const filteredUserIds = useMemo(() => new Set(filteredUsers.map((user) => user.id)), [filteredUsers])
+
+  const filteredSessions = useMemo(() => {
+    const now = new Date()
+    return sessions.filter((session) => {
+      if (!filteredUserIds.has(session.userId)) return false
+      const startedAt = parseDate(session.createdAt)
+      const endedAt = getSessionEffectiveEnd(session, now)
+      if (!startedAt || !endedAt) return false
+      return overlapMs(startedAt, endedAt, rangeBounds.from, rangeBounds.to) > 0
+    })
+  }, [sessions, filteredUserIds, rangeBounds])
+
+  const totalSessions = filteredSessions.length
+
+  const todayBounds = useMemo(() => {
+    const now = new Date()
+    const start = new Date(now)
+    start.setHours(0, 0, 0, 0)
+    return { start, end: now }
+  }, [lastUpdated])
+
+  const todayActivitySeconds = useMemo(() => {
+    const totalMs = filteredSessions.reduce((sum, session) => {
+      const startedAt = parseDate(session.createdAt)
+      const endedAt = getSessionEffectiveEnd(session, todayBounds.end)
+      if (!startedAt || !endedAt) return sum
+      return sum + overlapMs(startedAt, endedAt, todayBounds.start, todayBounds.end)
+    }, 0)
+    return Math.floor(totalMs / 1000)
+  }, [filteredSessions, todayBounds])
 
   const maleUsers = useMemo(() => filteredUsers.filter((u) => (u.gender || '').toLowerCase() === 'male').length, [filteredUsers])
   const femaleUsers = useMemo(() => filteredUsers.filter((u) => (u.gender || '').toLowerCase() === 'female').length, [filteredUsers])
@@ -132,9 +195,28 @@ const AnalyticsPage = () => {
 
   const mostActiveUser = useMemo(() => {
     if (!filteredUsers.length) return { name: 'No users yet', time: '' }
-    const sorted = [...filteredUsers].sort((a, b) => new Date(b.lastLogin || b.updatedAt) - new Date(a.lastLogin || a.updatedAt))
-    return { name: sorted[0]?.fullName || 'No users yet', time: formatTime(Math.floor(Math.random() * 300) + 60) }
-  }, [filteredUsers])
+    const durationByUser = new Map()
+
+    filteredSessions.forEach((session) => {
+      const startedAt = parseDate(session.createdAt)
+      const endedAt = getSessionEffectiveEnd(session, rangeBounds.to)
+      if (!startedAt || !endedAt) return
+      const duration = overlapMs(startedAt, endedAt, rangeBounds.from, rangeBounds.to)
+      if (duration <= 0) return
+      durationByUser.set(session.userId, (durationByUser.get(session.userId) || 0) + duration)
+    })
+
+    if (!durationByUser.size) {
+      return { name: 'No session activity', time: formatDuration(0) }
+    }
+
+    const [topUserId, topDurationMs] = [...durationByUser.entries()].sort((a, b) => b[1] - a[1])[0]
+    const topUser = filteredUsers.find((user) => user.id === topUserId)
+    return {
+      name: topUser?.fullName || 'Unknown User',
+      time: formatDuration(Math.floor(topDurationMs / 1000)),
+    }
+  }, [filteredUsers, filteredSessions, rangeBounds])
 
   /* ── SVG bar chart helpers ── */
   const svgW = 560
@@ -354,7 +436,7 @@ const AnalyticsPage = () => {
             <div className="sc-row">
               <div>
                 <p>Today&apos;s Activity</p>
-                <h4>{formatTime(activeMinutes)}</h4>
+                <h4>{formatDuration(todayActivitySeconds)}</h4>
                 <span className="sc-sub">Total active time today</span>
               </div>
               <span className="sc-icon pink-icon">⏱</span>

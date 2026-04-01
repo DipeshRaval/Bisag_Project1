@@ -56,6 +56,26 @@ const sanitizeUser = (user) => ({
 	updatedAt: user.updatedAt,
 })
 
+const sanitizeSession = (session) => ({
+	id: session.id,
+	userId: session.userId,
+	createdAt: session.createdAt,
+	endedAt: session.endedAt,
+	expiresAt: session.expiresAt,
+})
+
+const closeSessions = async (where = {}) => {
+	await prisma.session.updateMany({
+		where: {
+			...where,
+			endedAt: null,
+		},
+		data: {
+			endedAt: new Date(),
+		},
+	})
+}
+
 const createSession = async (res, userId) => {
 	const token = crypto.randomBytes(32).toString('hex')
 	const expiresAt = new Date(Date.now() + SESSION_TTL_MS)
@@ -64,6 +84,7 @@ const createSession = async (res, userId) => {
 			token,
 			userId,
 			expiresAt,
+			endedAt: null,
 		},
 	})
 	res.cookie(SESSION_COOKIE, token, { ...cookieOptions, maxAge: SESSION_TTL_MS })
@@ -71,7 +92,7 @@ const createSession = async (res, userId) => {
 
 const revokeUserSessions = async (userId) => {
 	if (!userId) return
-	await prisma.session.deleteMany({ where: { userId } })
+	await closeSessions({ userId })
 }
 
 const safeDeleteUpload = async (filename) => {
@@ -92,7 +113,7 @@ const safeDeleteUploads = async (filenames = []) => {
 
 const deleteSessionByToken = async (token) => {
 	if (!token) return
-	await prisma.session.deleteMany({ where: { token } })
+	await closeSessions({ token })
 }
 
 const getSessionFromRequest = async (req) => {
@@ -103,6 +124,7 @@ const getSessionFromRequest = async (req) => {
 		include: { user: true },
 	})
 	if (!session) return null
+	if (session.endedAt) return null
 	if (session.expiresAt < new Date()) {
 		await deleteSessionByToken(token)
 		return null
@@ -148,6 +170,13 @@ const validateStrongPassword = (password) => {
 	if (/(123|abc|password|qwerty)/i.test(password)) return 'Password is too common'
 	return ''
 }
+
+const isFutureDate = (date) => {
+	const now = new Date()
+	return date.getTime() > now.getTime()
+}
+
+const normalizeMobileNumber = (value) => String(value || '').replace(/\D/g, '')
 
 const hashOtp = (email, otp) => crypto.createHash('sha256').update(`${String(email).toLowerCase()}:${otp}`).digest('hex')
 
@@ -389,6 +418,44 @@ app.get('/api/users', requireAuth, async (_req, res) => {
 	}
 })
 
+app.get('/api/analytics/sessions', requireAuth, async (req, res) => {
+	try {
+		const { from = '', to = '' } = req.query || {}
+		const toDate = to ? new Date(String(to)) : new Date()
+		const fromDate = from ? new Date(String(from)) : new Date(toDate.getTime() - 90 * 24 * 60 * 60 * 1000)
+
+		if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+			return res.status(400).json({ message: 'Invalid from/to datetime' })
+		}
+
+		if (fromDate > toDate) {
+			return res.status(400).json({ message: 'from must be less than or equal to to' })
+		}
+
+		const sessions = await prisma.session.findMany({
+			where: {
+				createdAt: { lte: toDate },
+				OR: [
+					{ endedAt: { gte: fromDate } },
+					{ endedAt: null, expiresAt: { gte: fromDate } },
+				],
+			},
+			orderBy: { createdAt: 'desc' },
+			select: {
+				id: true,
+				userId: true,
+				createdAt: true,
+				endedAt: true,
+				expiresAt: true,
+			},
+		})
+
+		return res.json({ sessions: sessions.map(sanitizeSession) })
+	} catch (err) {
+		return res.status(500).json({ message: err.message || 'Failed to load analytics sessions' })
+	}
+})
+
 app.patch('/api/users/:id/status', requireAuth, async (req, res) => {
 	try {
 		const { id } = req.params
@@ -470,12 +537,14 @@ app.patch(
 			if (!dob) return res.status(400).json({ message: 'Date of birth cannot be empty' })
 			const parsedDob = new Date(dob)
 			if (Number.isNaN(parsedDob.getTime())) return res.status(400).json({ message: 'Invalid date of birth' })
+			if (isFutureDate(parsedDob)) return res.status(400).json({ message: 'Date of birth cannot be in the future' })
 			data.dob = parsedDob
 		}
 
 		if (email !== undefined) {
 			const normalizedEmail = String(email || '').trim().toLowerCase()
 			if (!normalizedEmail) return res.status(400).json({ message: 'Email is required' })
+			if (/\s/.test(String(email || ''))) return res.status(400).json({ message: 'Spaces are not allowed in email' })
 			if (!isValidEmail(normalizedEmail)) return res.status(400).json({ message: 'Email is invalid' })
 			const domain = normalizedEmail.split('@')[1]?.toLowerCase()
 			if (!domain || !allowedDomains.has(domain)) {
@@ -519,7 +588,10 @@ app.patch(
 
 		if (mobileNumber !== undefined) {
 			if (!mobileNumber.trim()) return res.status(400).json({ message: 'Mobile number cannot be empty' })
-			data.mobileNumber = mobileNumber.trim()
+			const normalizedMobile = normalizeMobileNumber(mobileNumber)
+			if (!normalizedMobile) return res.status(400).json({ message: 'Mobile number cannot be empty' })
+			if (normalizedMobile.length > 10) return res.status(400).json({ message: 'Mobile number cannot be more than 10 digits' })
+			data.mobileNumber = normalizedMobile
 		}
 
 		if (isActive !== undefined) {
@@ -775,7 +847,13 @@ app.post(
 			if (fullName && !/^[A-Za-z ]+$/.test(fullName)) errors.push('Only letters and spaces allowed in name')
 			if (!gender) errors.push('Gender is required')
 			if (!dob) errors.push('Date of birth is required')
+			if (dob) {
+				const parsedDob = new Date(dob)
+				if (Number.isNaN(parsedDob.getTime())) errors.push('Invalid date of birth')
+				else if (isFutureDate(parsedDob)) errors.push('Date of birth cannot be in the future')
+			}
 			if (!email) errors.push('Email is required')
+			if (email && /\s/.test(email)) errors.push('Spaces are not allowed in email')
 			if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) errors.push('Email is invalid')
 
 			const domain = email.split('@')[1]?.toLowerCase()
@@ -789,6 +867,9 @@ app.post(
 			if (password && /(123|abc|password|qwerty)/i.test(password)) errors.push('Password is too common')
 			if (password !== confirmPassword) errors.push('Passwords do not match')
 			if (!mobileNumber) errors.push('Mobile number is required')
+			const normalizedMobile = normalizeMobileNumber(mobileNumber)
+			if (mobileNumber && !normalizedMobile) errors.push('Enter a valid mobile number')
+			if (mobileNumber && normalizedMobile.length > 10) errors.push('Mobile number cannot be more than 10 digits')
 			if (!req.files || !req.files.profileImage) errors.push('Profile image is required')
 			if (!req.files || !req.files.document) errors.push('Document is required')
 
@@ -836,7 +917,7 @@ app.post(
 				dob,
 				password,
 				countryCode,
-				mobileNumber,
+				mobileNumber: normalizedMobile,
 				profileImagePath: profileFile?.filename || '',
 				documentPath: docFile?.filename || '',
 			})
@@ -904,6 +985,16 @@ app.post('/api/signup/verify-otp', async (req, res) => {
 
 		const passwordHash = await bcrypt.hash(pending.password, 10)
 		const dobDate = new Date(pending.dob)
+		if (Number.isNaN(dobDate.getTime())) {
+			await safeDeleteUploads([pending.profileImagePath, pending.documentPath])
+			pendingSignupStore.delete(normalizedToken)
+			return res.status(400).json({ message: 'Invalid date of birth. Please sign up again.' })
+		}
+		if (isFutureDate(dobDate)) {
+			await safeDeleteUploads([pending.profileImagePath, pending.documentPath])
+			pendingSignupStore.delete(normalizedToken)
+			return res.status(400).json({ message: 'Date of birth cannot be in the future. Please sign up again.' })
+		}
 		const now = new Date()
 		const user = await prisma.user.create({
 			data: {

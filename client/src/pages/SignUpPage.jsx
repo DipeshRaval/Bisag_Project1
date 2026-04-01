@@ -74,6 +74,14 @@ const SignUpPage = () => {
     return parsed.toISOString().slice(0, 10)
   }
 
+  const isFutureDob = (value) => {
+    const parsed = new Date(value)
+    if (Number.isNaN(parsed.getTime())) return false
+    const todayEnd = new Date()
+    todayEnd.setHours(23, 59, 59, 999)
+    return parsed > todayEnd
+  }
+
   const validators = {
     fullName: (value) => {
       if (!value.trim()) return 'Full name is required'
@@ -85,10 +93,12 @@ const SignUpPage = () => {
       if (!value) return 'Date of birth is required'
       const parsed = new Date(value)
       if (Number.isNaN(parsed.getTime())) return 'Use format like 01 Mar 2026'
+      if (isFutureDob(value)) return 'Date of birth cannot be in the future'
       return ''
     },
     email: (value) => {
       if (!value) return 'Email is required'
+      if (/\s/.test(value)) return 'Spaces are not allowed in email'
       const parts = value.split('@')
       if (parts.length !== 2) return 'Enter a valid email'
       const domain = parts[1].toLowerCase()
@@ -112,6 +122,7 @@ const SignUpPage = () => {
     },
     mobileNumber: (value, data) => {
       if (!value) return 'Mobile number is required'
+      if (value.length > 10) return 'Mobile number cannot be more than 10 digits'
       try {
         const number = phoneUtil.parse(`${data.countryCode}${value}`)
         if (!phoneUtil.isValidNumber(number)) return 'Enter a valid phone number'
@@ -150,7 +161,10 @@ const SignUpPage = () => {
 
   const handleChange = (e) => {
     const { name, value } = e.target
-    const nextValue = name === 'fullName' ? value.replace(/\s+/g, ' ') : value
+    let nextValue = value
+    if (name === 'fullName') nextValue = value.replace(/\s+/g, ' ')
+    if (name === 'email') nextValue = value.replace(/\s+/g, '')
+    if (name === 'mobileNumber') nextValue = value.replace(/\D/g, '').slice(0, 10)
     const nextForm = { ...formData, [name]: nextValue }
     setFormData(nextForm)
     const validationMessage = validators[name]?.(nextValue, nextForm) || ''
@@ -418,6 +432,7 @@ const SignUpPage = () => {
                 onChange={handleChange}
                 onBlur={handleBlur}
                 placeholder="you@example.com"
+                inputMode="email"
                 className={`mt-2 w-full rounded-2xl border bg-white px-4 py-3 shadow-sm outline-none transition focus:border-indigo-300 focus:shadow-lg focus:shadow-indigo-100 ${fieldBorder('email', formData.email)}`}
               />
               <p className={`mt-1 text-xs ${errors.email ? 'text-red-500' : 'text-slate-500'}`}>
@@ -582,6 +597,9 @@ const SignUpPage = () => {
                 onChange={handleChange}
                 onBlur={handleBlur}
                 placeholder="98765-43210"
+                maxLength={10}
+                inputMode="numeric"
+                pattern="[0-9]{10}"
                 className={`flex-1 rounded-2xl border bg-white px-4 py-3 shadow-sm outline-none transition focus:border-indigo-300 focus:shadow-lg focus:shadow-indigo-100 ${fieldBorder('mobileNumber', formData.mobileNumber)}`}
               />
             </div>

@@ -19,7 +19,7 @@ const UserManagementPage = () => {
   const [lightbox, setLightbox] = useState({ src: '', title: '' })
   const [deletingUserId, setDeletingUserId] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
-  const itemsPerPage = 10
+  const [itemsPerPage, setItemsPerPage] = useState(10)
 
   const loadData = async () => {
     try {
@@ -89,14 +89,22 @@ const UserManagementPage = () => {
 
   useEffect(() => {
     setCurrentPage(1)
-  }, [searchTerm, genderFilter, statusFilter, sortBy])
+  }, [searchTerm, genderFilter, statusFilter, sortBy, itemsPerPage])
+
+  const totalPages = Math.max(1, Math.ceil(filteredUsers.length / itemsPerPage))
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(prev, totalPages))
+  }, [totalPages])
 
   const paginatedUsers = useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage
     return filteredUsers.slice(startIndex, startIndex + itemsPerPage)
-  }, [filteredUsers, currentPage])
+  }, [filteredUsers, currentPage, itemsPerPage])
 
-  const totalPages = Math.ceil(filteredUsers.length / itemsPerPage)
+  const pageStart = filteredUsers.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1
+  const pageEnd = Math.min(currentPage * itemsPerPage, filteredUsers.length)
+  const pageNumbers = Array.from({ length: totalPages }, (_, idx) => idx + 1)
 
   const activeCount = useMemo(() => users.filter((u) => u.isActive).length, [users])
   const maleCount = useMemo(() => users.filter((u) => (u.gender || '').toLowerCase() === 'male').length, [users])
@@ -219,10 +227,26 @@ const UserManagementPage = () => {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
-          <div style={{ flex: 1 }} />
-          <button type="button" className="light-btn" onClick={loadData}>Refresh</button>
-          <button type="button" className="soft-blue-btn" onClick={() => navigate('/analytics')}>Analytics</button>
-          <button type="button" className="soft-red-btn" onClick={handleLogout}>Logout</button>
+          <div className="table-controls-right">
+            <div className="table-controls-actions">
+              <button type="button" className="light-btn" onClick={loadData}>Refresh</button>
+              <button type="button" className="soft-blue-btn" onClick={() => navigate('/analytics')}>Analytics</button>
+              <button type="button" className="soft-red-btn" onClick={handleLogout}>Logout</button>
+            </div>
+            <label className="page-size-control" htmlFor="page-size-select">
+              Page size
+              <select
+                id="page-size-select"
+                value={itemsPerPage}
+                onChange={(e) => setItemsPerPage(Number(e.target.value))}
+              >
+                <option value={5}>5</option>
+                <option value={10}>10</option>
+                <option value={20}>20</option>
+                <option value={50}>50</option>
+              </select>
+            </label>
+          </div>
         </div>
 
         <div className="filter-panel">
@@ -361,7 +385,7 @@ const UserManagementPage = () => {
         )}
 
         {totalPages > 1 && (
-          <div className="pagination-controls" style={{ display: 'flex', gap: '10px', marginTop: '14px', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="pagination-controls">
             <button
               type="button"
               className="light-btn"
@@ -370,7 +394,24 @@ const UserManagementPage = () => {
             >
               Previous
             </button>
-            <span style={{ fontSize: '12px', color: '#667085' }}>
+            <span className="pagination-label">
+              Showing {pageStart}-{pageEnd} of {filteredUsers.length}
+            </span>
+            <div className="pagination-pages">
+              {pageNumbers.map((page) => (
+                <button
+                  key={page}
+                  type="button"
+                  className={`page-number-btn ${currentPage === page ? 'active' : ''}`}
+                  onClick={() => setCurrentPage(page)}
+                  aria-label={`Go to page ${page}`}
+                  aria-current={currentPage === page ? 'page' : undefined}
+                >
+                  {page}
+                </button>
+              ))}
+            </div>
+            <span className="pagination-label">
               Page {currentPage} of {totalPages}
             </span>
             <button
